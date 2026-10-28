@@ -121,14 +121,48 @@ found only these 3 small issues, all documented with decisions.
 
 ---
 
-## Phase 2 — Clean (next)
-- Staging copy of orders_raw → dedupe with ROW_NUMBER() in a CTE (remove Row ID 3407)
-- TRIM(Product Name) — 16 rows
-- TRIM all text columns defensively; UPPER/standardize where needed
-- CAST columns to proper types: dates via STR_TO_DATE('%m/%d/%Y'),
-  Sales/Profit/Discount DECIMAL, Quantity SIGNED, Postal Code keep as text (leading zeros)
-- Build `orders_clean` table
-- Create `docs/cleaning_log.md`: issue | rows affected | fix | why (3 findings above)
+## Phase 2 — Clean — IN PROGRESS
+
+Agreed plan: orders_raw (untouched) → orders_stage (working copy) → orders_clean (final).
+One staging table; each step is a separate visible statement with a count check.
+
+### Step 1 — Working copy ✔ COMPLETE
+- `CREATE TABLE orders_stage LIKE orders_raw` + INSERT from orders_raw.
+- Mishap (logged honestly): a multi-statement batch ran despite a SQLTools TypeError,
+  causing a double insert (19,988 rows). Fixed via DROP + rebuild.
+  Lesson: run one statement at a time; end every step with a count check.
+- ✔ Check: orders_stage = 9,994 rows; orders_raw untouched.
+
+### Step 2 — Dedupe ✔ COMPLETE (9,993 rows)
+- 2a ✔ Snapshot taken BEFORE delete (needed for Step 6 reconcile):
+  Row ID 3407 (US-2014-150119): Sales 281.372, Profit −12.0588.
+- 2b ✔ Check 1 passed: exactly 1 row with rn > 1 → Row ID 3407.
+- 2b Check 2 returned 29 rows — check's filter was too broad (all line items in
+  those 7 orders, not just the duplicate pairs). Data unaffected; replaced by
+  global Check 3: rn=1 → 9,993, rn=2 → 1 ✔.
+- 2c ✔ First delete approach (correlated UPDATE + helper column) was O(n²) —
+  8+ min, killed; InnoDB rolled back cleanly. REVISED: delete by verified key
+  (Row ID 3407, triple-checked) → 1 row affected, count 9,993 ✔.
+  Lesson: ROW_NUMBER() finds the row; once verified, delete by key.
+
+### Step 3 ✔ COMPLETE — TRIM(Product Name): preview 16, UPDATE 16 rows affected,
+  0 dirty after, distinct 1850 (unchanged). Ground-truth check on the raw CSV
+  proved ALL occurrences of the 3 affected products were dirty (4+4+8=16) —
+  trim = normalization to canonical form, NOT merging split names. Log now
+  records full untruncated names. Lesson: grids truncate text; verify literals
+  against the raw file.
+
+### Step 4 — U+FFFD (Row IDs 431–432) — log entry only, no SQL
+- Kept as-is (no safe replacement for the original text); goes to cleaning_log.
+
+### Remaining steps (not started)
+- Step 5: build `orders_clean` — DATE via STR_TO_DATE('%m/%d/%Y'), Sales/Profit
+  DECIMAL(10,2), Discount DECIMAL(5,2), Quantity/Row ID INT, Postal Code as text,
+  snake_case names
+- Step 6: reconcile — 9,993 rows; totals = raw minus Row ID 3407's values
+  (Sales 281.372, Profit −12.0588)
+- Step 7: `docs/cleaning_log.md` — 5-row decision table
+- Step 8: finalize `sql/02_clean.sql`, update SCRIPT.md, commit + push
 
 ## Phase 3 — Analysis (after Phase 2)
 Nine business questions incl. discount-band CASE analysis, loss-making set, region/state
